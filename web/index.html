@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>私有化部署服务</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --border:#2a2f3a; --fg:#e6e8ec; --muted:#8b93a1; --accent:#3b82f6; --ok:#22c55e; --err:#ef4444; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:18px 28px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  header .sub { color:var(--muted); font-size:13px; }
+  .wrap { display:grid; grid-template-columns:440px 1fr; gap:0; height:calc(100vh - 61px); }
+  .panel { padding:22px 26px; overflow-y:auto; }
+  .panel.left { border-right:1px solid var(--border); }
+  .group { margin-bottom:20px; }
+  .group h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 12px; }
+  label { display:block; font-size:13px; margin-bottom:5px; color:var(--fg); }
+  .field { margin-bottom:12px; }
+  input, select { width:100%; padding:9px 11px; background:var(--card); border:1px solid var(--border); border-radius:7px; color:var(--fg); font-size:14px; outline:none; }
+  input:focus, select:focus { border-color:var(--accent); }
+  .row { display:grid; grid-template-columns:1fr 90px; gap:10px; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+  button { width:100%; padding:12px; background:var(--accent); color:#fff; border:none; border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; margin-top:6px; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .console { background:#0a0c10; border:1px solid var(--border); border-radius:8px; height:100%; padding:14px 16px; overflow-y:auto; font-family:"Cascadia Code",Consolas,monospace; font-size:12.5px; line-height:1.6; white-space:pre-wrap; word-break:break-all; }
+  .console .cmd { color:#7dd3fc; }
+  .console .err { color:var(--err); }
+  .console .ok { color:var(--ok); }
+  .console .sec { color:#fbbf24; font-weight:600; }
+  .status { padding:8px 14px; font-size:13px; border-radius:6px; margin-bottom:12px; display:none; }
+  .status.run { display:block; background:#1e293b; color:#93c5fd; }
+  .status.ok { display:block; background:#052e1a; color:var(--ok); }
+  .status.err { display:block; background:#3f1414; color:var(--err); }
+  .checks { display:flex; flex-direction:column; gap:8px; }
+  .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:0; cursor:pointer; }
+  .chk input { width:auto; }
+  .comp { border:1px solid var(--border); border-radius:9px; margin-bottom:12px; overflow:hidden; }
+  .comp > .head { display:flex; align-items:center; gap:9px; padding:11px 14px; background:var(--card); cursor:pointer; font-size:14px; font-weight:600; }
+  .comp > .head input { width:auto; }
+  .comp > .body { padding:12px 14px 4px; display:none; border-top:1px solid var(--border); }
+  .comp.on > .body { display:block; }
+  button.danger { background:var(--err); display:none; }
+  button.ghost { background:transparent; border:1px solid var(--border); color:var(--fg); font-weight:400; font-size:13px; padding:8px; }
+  .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.65); display:none; align-items:center; justify-content:center; z-index:50; }
+  .modal-mask.show { display:flex; }
+  .modal { background:var(--card); border:1px solid var(--border); border-radius:12px; max-width:620px; width:92%; padding:24px 26px; max-height:85vh; overflow-y:auto; }
+  .modal h3 { margin:0 0 14px; font-size:16px; }
+  .modal p, .modal li { font-size:13.5px; line-height:1.7; color:var(--fg); }
+  .modal .muted { color:var(--muted); font-size:12.5px; }
+  .codebox { background:#0a0c10; border:1px solid var(--border); border-radius:7px; padding:10px 12px; font-family:Consolas,monospace; font-size:12px; word-break:break-all; margin:6px 0 4px; position:relative; }
+  .copybtn { width:auto; padding:4px 12px; font-size:12px; margin:0 0 10px; background:#2a2f3a; }
+</style>
+</head>
+<body>
+<!-- 注意事项（每次打开须同意） -->
+<div class="modal-mask show" id="noticeMask">
+  <div class="modal">
+    <h3>使用前请知悉</h3>
+    <ul>
+      <li>本程序通过 <b>SSH 直连</b>目标服务器执行安装：若目标服务器只能经<b>堡垒机</b>跳转访问、或与本机网络不可达（不同网段未打通、防火墙拦截 22 端口等），<b>程序无法安装</b>。</li>
+      <li>安装会在目标机写入：/data/apps 下组件目录、systemd 服务、（Docker）/usr/local/bin 二进制。"中断并清理"会删除这些痕迹，请勿在生产已有同名服务的机器上随意执行。</li>
+      <li>连接凭据（密码/密钥）仅在本机使用，不会上传任何第三方。</li>
+      <li>目标系统支持：麒麟 / openEuler / CentOS 7+ / Ubuntu 等主流 Linux（x86_64 / arm64 自动适配；CentOS 7 老内核自动改装 Docker 20.10 兼容版）。</li>
+      <li>容器组件（EMQX/RocketMQ/TDengine/Kafka/fx）需目标机<b>先装 Docker</b>，且本机<b>镜像目录</b>（默认 F:\阿克苏镜像准备）已放好对应架构镜像 tar。</li>
+      <li>Redis/Nginx 源码编译需目标机有 gcc/make（无网络请挂系统 ISO 配本地源，详见《无网络部署依赖清单》）。</li>
+    </ul>
+    <button onclick="document.getElementById('noticeMask').classList.remove('show')">我已知悉并同意</button>
+  </div>
+</div>
+
+<!-- 免密配置 -->
+<div class="modal-mask" id="keyMask">
+  <div class="modal">
+    <h3>SSH 免密配置</h3>
+    <p>本机已生成专用密钥对。把下面命令粘贴到<b>每台目标服务器</b>执行一次（多台共用同一公钥），之后本程序密码留空即可免密安装：</p>
+    <div class="codebox" id="kInstallCmd">加载中…</div>
+    <button class="copybtn" onclick="copyText('kInstallCmd')">复制配置命令</button>
+    <p class="muted">部署全部完成后，建议在各服务器删除该公钥（一键删除命令）：</p>
+    <div class="codebox" id="kRemoveCmd">…</div>
+    <button class="copybtn" onclick="copyText('kRemoveCmd')">复制删除命令</button>
+    <p class="muted">公钥指纹备注为 aksu-installer，删除命令按该备注精确匹配，不影响其它公钥。</p>
+    <button onclick="document.getElementById('keyMask').classList.remove('show')">关闭</button>
+  </div>
+</div>
+
+<header>
+  <h1>私有化部署服务</h1>
+  <span class="sub">勾选组件、填写变量，SSH 到目标服务器自动安装</span>
+</header>
+<div class="wrap">
+  <div class="panel left">
+    <div class="group">
+      <h2>目标服务器（SSH）</h2>
+      <div class="field">
+        <label>服务器 IP</label>
+        <div class="row">
+          <input id="host" placeholder="192.168.40.170" />
+          <input id="port" value="22" />
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>用户名</label><input id="user" value="root" /></div>
+        <div class="field"><label>密码（已配免密可留空）</label><input id="password" type="password" placeholder="SSH 密码" /></div>
+      </div>
+      <button class="ghost" onclick="showKeyModal()">免密配置（生成本机公钥 / 删除命令）</button>
+      <div style="height:10px"></div>
+      <div class="row2">
+        <div class="field"><label>安装目录</label><input id="installBase" value="/data/apps" /></div>
+        <div class="field"><label>临时目录</label><input id="tmpDir" value="/data/apps/tmp" /></div>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>选择组件（按依赖顺序自动执行）</h2>
+
+      <div class="comp" id="comp-jdk">
+        <div class="head" onclick="toggleComp('jdk', event)"><input type="checkbox" id="sel-jdk" checked /> JDK</div>
+        <div class="body">
+          <div class="checks" style="margin-bottom:10px">
+            <label class="chk"><input type="checkbox" id="jdk8" checked onchange="syncDefault()" /> JDK 8（jdk-8u471）</label>
+            <label class="chk"><input type="checkbox" id="jdk17" onchange="syncDefault()" /> JDK 17</label>
+          </div>
+          <div class="field">
+            <label>默认版本（/data/apps/jdk 软链与 JAVA_HOME）</label>
+            <select id="jdkDefault"></select>
+            <div class="hint">多版本共存：分别装到 jdk8 / jdk17 目录。应用服务器请同时勾选两个版本。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-redis">
+        <div class="head" onclick="toggleComp('redis', event)"><input type="checkbox" id="sel-redis" /> Redis 6.2.9（源码编译）</div>
+        <div class="body">
+          <div class="row2">
+            <div class="field"><label>端口</label><input id="redisPort" value="6379" /></div>
+            <div class="field"><label>密码</label><input id="redisPassword" value="HaiOJPPAph21f2Cs" /></div>
+          </div>
+          <div class="hint">需要目标机 yum/dnf/apt 源可装 gcc/make（离线现场需本地源）。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-minio">
+        <div class="head" onclick="toggleComp('minio', event)"><input type="checkbox" id="sel-minio" /> MinIO（二进制）</div>
+        <div class="body">
+          <div class="row2">
+            <div class="field"><label>API 端口</label><input id="minioApiPort" value="9000" /></div>
+            <div class="field"><label>控制台端口</label><input id="minioConsolePort" value="39181" /></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>管理账号</label><input id="minioRootUser" value="root" /></div>
+            <div class="field"><label>管理密码</label><input id="minioRootPass" value="Cak9uNPYIPaWtZXu" /></div>
+          </div>
+        </div>
+      </div>
+      <div class="comp" id="comp-nacos">
+        <div class="head" onclick="toggleComp('nacos', event)"><input type="checkbox" id="sel-nacos" /> Nacos 2.5.1（需 JDK）</div>
+        <div class="body">
+          <div class="field"><label>Nacos 端口</label><input id="nacosPort" value="8848" /></div>
+          <div class="field">
+            <label>数据库类型</label>
+            <select id="nacosDbType" onchange="dbDefaults('nacos')">
+              <option value="dameng">达梦</option>
+              <option value="mysql">MySQL</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>数据库 IP（留空 = 内嵌库，仅测试用）</label>
+            <div class="row">
+              <input id="nacosDmHost" placeholder="192.168.40.173" />
+              <input id="nacosDmPort" value="5236" />
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>Schema / 库名</label><input id="nacosDmSchema" value="NACOS" /></div>
+            <div class="field"><label>数据库用户</label><input id="nacosDmUser" value="SYSDBA" /></div>
+          </div>
+          <div class="field"><label>数据库密码</label><input id="nacosDmPass" value="YK1hv8G2I471k2wL" /></div>
+          <div class="field"><label>鉴权 Token Secret</label><input id="nacosTokenSecret" value="eXQ4eTQ3c1VZcSVSdkQzQFlNdVhWeVk0ZmpHUlojWFEK" /></div>
+          <div class="hint">建表 SQL：达梦用离线包 nacos/sql/nacos-dm-2.5.1.sql；MySQL 用 nacos 包内 conf/mysql-schema.sql。需先人工执行。</div>
+        </div>
+      </div>
+      <div class="comp" id="comp-docker">
+        <div class="head" onclick="toggleComp('docker', event)"><input type="checkbox" id="sel-docker" /> Docker 29.5.3（静态离线包，x86/arm 自适应）</div>
+        <div class="body">
+          <div class="field">
+            <label>私有镜像仓库 / 加速器地址（可选）</label>
+            <input id="dockerMirror" placeholder="http://192.168.x.x:5000（以后有仓库再填）" />
+            <div class="hint">数据目录装到 /data/apps/docker。已装 Docker 的机器自动跳过。EMQX/RocketMQ/TDengine 等容器组件等镜像仓库就绪后做。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-sentinel">
+        <div class="head" onclick="toggleComp('sentinel', event)"><input type="checkbox" id="sel-sentinel" /> Sentinel 1.8.2（需 JDK）</div>
+        <div class="body">
+          <div class="field"><label>控制台端口</label><input id="sentinelPort" value="8849" /></div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-xxljob">
+        <div class="head" onclick="toggleComp('xxljob', event)"><input type="checkbox" id="sel-xxljob" /> XXL-JOB 2.2.0（需 JDK + 数据库）</div>
+        <div class="body">
+          <div class="field"><label>服务端口</label><input id="xxlPort" value="8081" /></div>
+          <div class="field">
+            <label>数据库类型</label>
+            <select id="xxlDbType" onchange="dbDefaults('xxl')">
+              <option value="dameng">达梦</option>
+              <option value="mysql">MySQL</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>数据库 IP（必填）</label>
+            <div class="row">
+              <input id="xxlDbHost" placeholder="192.168.40.100" />
+              <input id="xxlDbPort" value="5236" />
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>库名 / Schema</label><input id="xxlDbName" value="XXL_JOB" /></div>
+            <div class="field"><label>数据库用户</label><input id="xxlDbUser" value="SYSDBA" /></div>
+          </div>
+          <div class="field"><label>数据库密码</label><input id="xxlDbPass" placeholder="数据库密码" /></div>
+          <div class="hint">建表 SQL：达梦 tables-xxl-job-dm.sql / MySQL tables-xxl-job-mysql.sql（离线包 xxl-job/sql 下），需先人工执行。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-emqx">
+        <div class="head" onclick="toggleComp('emqx', event)"><input type="checkbox" id="sel-emqx" /> EMQX 4.4.19（容器，需 Docker）</div>
+        <div class="body">
+          <div class="field"><label>控制台 admin 密码</label><input id="emqxDashPass" value="public" /></div>
+          <div class="hint">端口 1883/8083/8084/8883/18083，控制台 18083。数据目录 /data/apps/emqx。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-rocketmq">
+        <div class="head" onclick="toggleComp('rocketmq', event)"><input type="checkbox" id="sel-rocketmq" /> RocketMQ 5.0.0 官方（容器，需 Docker）</div>
+        <div class="body">
+          <div class="hint">NameServer 9876 / Broker 10911 / Dashboard 8088。对外 IP 见下方"容器对外 IP"（留空自动探测）。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-tdengine">
+        <div class="head" onclick="toggleComp('tdengine', event)"><input type="checkbox" id="sel-tdengine" /> TDengine 3.3.8.8（容器，需 Docker）</div>
+        <div class="body">
+          <div class="hint">服务 6030 / REST 6041 / Explorer 6060，默认 root/taosdata。数据 /data/apps/tdengine。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-kafka">
+        <div class="head" onclick="toggleComp('kafka', event)"><input type="checkbox" id="sel-kafka" /> Kafka 4.3.0 KRaft（容器，需 Docker）</div>
+        <div class="body">
+          <div class="hint">单机 KRaft，host 网络，broker 9092 / controller 9093。对外 IP 见下方（留空自动探测）。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-fx">
+        <div class="head" onclick="toggleComp('fx', event)"><input type="checkbox" id="sel-fx" /> fx-python-tool-api（容器，需 Docker）</div>
+        <div class="body">
+          <div class="hint">Django 应用，端口 30111。用预 build 完整镜像（含依赖），无网络直接 load 运行。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-nginx">
+        <div class="head" onclick="toggleComp('nginx', event)"><input type="checkbox" id="sel-nginx" /> Nginx 1.26.1（源码编译）</div>
+        <div class="body">
+          <div class="field"><label>监听端口</label><input id="nginxPort" value="80" /></div>
+          <div class="hint">需目标机有 gcc + pcre/zlib/openssl-devel（无网络挂系统 ISO 配本地源）。装到 /data/apps/nginx。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-clickhouse">
+        <div class="head" onclick="toggleComp('clickhouse', event)"><input type="checkbox" id="sel-clickhouse" /> ClickHouse 23.4.2.11</div>
+        <div class="body">
+          <div class="row2">
+            <div class="field"><label>HTTP 端口</label><input id="chHttpPort" value="8123" /></div>
+            <div class="field"><label>TCP 端口</label><input id="chTcpPort" value="9000" /></div>
+          </div>
+          <div class="field"><label>default 用户密码</label><input id="chPass" value="Ft8wZXYrVUnLmaAe" /></div>
+          <div class="hint">tgz 离线安装，数据目录 /data/apps/clickhouse/data。</div>
+        </div>
+      </div>
+
+      <div class="comp" id="comp-influxdb">
+        <div class="head" onclick="toggleComp('influxdb', event)"><input type="checkbox" id="sel-influxdb" /> InfluxDB 2.7</div>
+        <div class="body">
+          <div class="field"><label>端口</label><input id="influxPort" value="8086" /></div>
+          <div class="row2">
+            <div class="field"><label>管理账号</label><input id="influxUser" value="admin" /></div>
+            <div class="field"><label>管理密码</label><input id="influxPass" value="qcExVVbmw63D2nwa" /></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>组织 org</label><input id="influxOrg" value="fx" /></div>
+            <div class="field"><label>桶 bucket</label><input id="influxBucket" value="tian-ji-cloud" /></div>
+          </div>
+          <div class="field"><label>Token</label><input id="influxToken" value="RT8enTw9waSIUYgO7mZ7R8PQ2dhuy-l7tp5r7D3wI1lMbLjyMS9DGnQmItrpeOMur34R3yT99LO_wIcT8YN5-A==" /></div>
+          <div class="hint">首次自动 influx setup 初始化（幂等）。</div>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:6px">
+        <label>容器对外 IP（Kafka/RocketMQ 发布地址，留空自动探测目标机主 IP）</label>
+        <input id="advertiseIP" placeholder="留空=自动" />
+      </div>
+    </div>
+
+    <button id="btn" onclick="install()">开始安装</button>
+    <button id="abortBtn" class="danger" onclick="abortInstall()">⛔ 全程中断并清理安装痕迹</button>
+    <button id="cleanBtn" class="danger" onclick="cleanupTraces()">清理本次安装痕迹</button>
+  </div>
+
+  <div class="panel">
+    <div id="status" class="status"></div>
+    <div id="console" class="console">等待开始…</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const consoleEl = $("console");
+const statusEl = $("status");
+
+function line(text) {
+  const div = document.createElement("div");
+  if (text.startsWith("$ ")) div.className = "cmd";
+  else if (text.startsWith("错误:") || text.includes("失败")) div.className = "err";
+  else if (text.startsWith("===")) div.className = "sec";
+  else if (text.includes("成功") || text.includes("完成") || text.includes("通过")) div.className = "ok";
+  div.textContent = text;
+  consoleEl.appendChild(div);
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+function setStatus(cls, text) { statusEl.className = "status " + cls; statusEl.textContent = text; }
+
+// ---- 免密 ----
+async function showKeyModal() {
+  document.getElementById("keyMask").classList.add("show");
+  const r = await fetch("/api/pubkey");
+  const d = await r.json();
+  if (d.error) { $("kInstallCmd").textContent = "生成失败: " + d.error; return; }
+  $("kInstallCmd").textContent = d.installCmd;
+  $("kRemoveCmd").textContent = d.removeCmd;
+}
+function copyText(id) {
+  navigator.clipboard.writeText($(id).textContent).then(() => setStatus("ok", "已复制到剪贴板"));
+}
+
+// ---- 中断 / 清理 ----
+async function abortInstall() {
+  const word = prompt('确认要"中断安装并清理目标机上的安装痕迹"吗？\n此操作会删除本次所选组件的目录/服务。\n\n请输入两个字确认：中断');
+  if (word !== "中断") { if (word !== null) setStatus("err", "确认文字不匹配，已取消"); return; }
+  setStatus("run", "正在中断并清理…");
+  await fetch("/api/abort", { method: "POST" });
+}
+async function cleanupTraces() {
+  const word = prompt('确认清理本次所选组件在目标机上的安装痕迹（目录/服务/用户）？\n\n请输入两个字确认：清理');
+  if (word !== "清理") { if (word !== null) setStatus("err", "确认文字不匹配，已取消"); return; }
+  $("cleanBtn").style.display = "none";
+  setStatus("run", "正在清理…");
+  const r = await fetch("/api/cleanup", { method: "POST" });
+  const d = await r.json();
+  if (d.error) { setStatus("err", d.error); return; }
+  attachLogs();
+}
+
+function attachLogs() {
+  const es = new EventSource("/api/logs");
+  es.onmessage = e => {
+    const text = JSON.parse(e.data);
+    line(text);
+    if (text.includes("全部组件安装成功")) setStatus("ok", "全部组件安装成功");
+    if (text.includes("安装失败") || text.includes("任务中止")) { setStatus("err", "安装失败，可清理痕迹后重试"); $("cleanBtn").style.display = "block"; }
+    if (text.includes("已中断并完成清理")) setStatus("ok", "已中断，痕迹已清理");
+    if (text.includes("痕迹未清理")) { setStatus("err", "已中断，但清理未完成"); $("cleanBtn").style.display = "block"; }
+  };
+  es.addEventListener("done", () => { es.close(); $("btn").disabled = false; $("abortBtn").style.display = "none"; });
+  es.onerror = () => { es.close(); $("btn").disabled = false; $("abortBtn").style.display = "none"; };
+}
+
+// 组件卡片展开/收起跟随勾选状态
+function toggleComp(key, ev) {
+  const box = $("sel-" + key);
+  if (ev.target !== box) box.checked = !box.checked;
+  $("comp-" + key).classList.toggle("on", box.checked);
+}
+const ALL_COMPS = ["jdk", "docker", "redis", "minio", "nacos", "sentinel", "xxljob", "emqx", "rocketmq", "tdengine", "kafka", "fx", "nginx", "clickhouse", "influxdb"];
+
+function refreshComp() {
+  for (const k of ALL_COMPS) {
+    $("comp-" + k).classList.toggle("on", $("sel-" + k).checked);
+  }
+}
+
+// 切换数据库类型时联动默认 端口/库名/用户
+function dbDefaults(prefix) {
+  const isMysql = $(prefix === "nacos" ? "nacosDbType" : "xxlDbType").value === "mysql";
+  if (prefix === "nacos") {
+    $("nacosDmPort").value = isMysql ? "3306" : "5236";
+    $("nacosDmSchema").value = isMysql ? "nacos" : "NACOS";
+    $("nacosDmUser").value = isMysql ? "root" : "SYSDBA";
+  } else {
+    $("xxlDbPort").value = isMysql ? "3306" : "5236";
+    $("xxlDbName").value = isMysql ? "xxl_job" : "XXL_JOB";
+    $("xxlDbUser").value = isMysql ? "root" : "SYSDBA";
+  }
+}
+
+function syncDefault() {
+  const sel = $("jdkDefault");
+  const prev = sel.value;
+  const opts = [];
+  if ($("jdk8").checked) opts.push(["8", "JDK 8"]);
+  if ($("jdk17").checked) opts.push(["17", "JDK 17"]);
+  sel.innerHTML = "";
+  for (const [v, t] of opts) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = t;
+    sel.appendChild(o);
+  }
+  if (opts.some(o => o[0] === prev)) sel.value = prev;
+}
+
+async function install() {
+  const components = [];
+  for (const k of ALL_COMPS) {
+    if ($("sel-" + k).checked) components.push(k);
+  }
+  if (components.length === 0) { setStatus("err", "请至少勾选一个组件"); return; }
+
+  const versions = [];
+  if ($("jdk8").checked) versions.push("8");
+  if ($("jdk17").checked) versions.push("17");
+  if (components.includes("jdk") && versions.length === 0) { setStatus("err", "请至少勾选一个 JDK 版本"); return; }
+
+  const params = {
+    host: $("host").value.trim(),
+    port: parseInt($("port").value) || 22,
+    user: $("user").value.trim(),
+    password: $("password").value,
+    installBase: $("installBase").value.trim(),
+    tmpDir: $("tmpDir").value.trim(),
+    jdkVersions: versions,
+    jdkDefault: $("jdkDefault").value,
+    redisPort: $("redisPort").value.trim(),
+    redisPassword: $("redisPassword").value,
+    minioApiPort: $("minioApiPort").value.trim(),
+    minioConsolePort: $("minioConsolePort").value.trim(),
+    minioRootUser: $("minioRootUser").value.trim(),
+    minioRootPass: $("minioRootPass").value,
+    nacosPort: $("nacosPort").value.trim(),
+    nacosDbType: $("nacosDbType").value,
+    nacosDmHost: $("nacosDmHost").value.trim(),
+    nacosDmPort: $("nacosDmPort").value.trim(),
+    nacosDmSchema: $("nacosDmSchema").value.trim(),
+    nacosDmUser: $("nacosDmUser").value.trim(),
+    nacosDmPass: $("nacosDmPass").value,
+    nacosTokenSecret: $("nacosTokenSecret").value.trim(),
+    sentinelPort: $("sentinelPort").value.trim(),
+    xxlPort: $("xxlPort").value.trim(),
+    xxlDbType: $("xxlDbType").value,
+    xxlDbHost: $("xxlDbHost").value.trim(),
+    xxlDbPort: $("xxlDbPort").value.trim(),
+    xxlDbName: $("xxlDbName").value.trim(),
+    xxlDbUser: $("xxlDbUser").value.trim(),
+    xxlDbPass: $("xxlDbPass").value,
+    dockerMirror: $("dockerMirror").value.trim(),
+    emqxDashPass: $("emqxDashPass").value,
+    advertiseIP: $("advertiseIP").value.trim(),
+    nginxPort: $("nginxPort").value.trim(),
+    chHttpPort: $("chHttpPort").value.trim(),
+    chTcpPort: $("chTcpPort").value.trim(),
+    chPass: $("chPass").value,
+    influxPort: $("influxPort").value.trim(),
+    influxUser: $("influxUser").value.trim(),
+    influxPass: $("influxPass").value,
+    influxOrg: $("influxOrg").value.trim(),
+    influxBucket: $("influxBucket").value.trim(),
+    influxToken: $("influxToken").value.trim(),
+  };
+  if (components.includes("xxljob") && !params.xxlDbHost) { setStatus("err", "XXL-JOB 必须填数据库 IP"); return; }
+  if (!params.host) { setStatus("err", "请填写服务器 IP"); return; }
+  // 密码可留空（走免密公钥），由后端自动使用本机私钥
+
+  $("btn").disabled = true;
+  $("cleanBtn").style.display = "none";
+  $("abortBtn").style.display = "block";
+  consoleEl.innerHTML = "";
+  setStatus("run", "安装进行中…");
+
+  const resp = await fetch("/api/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ components, params }),
+  });
+  const data = await resp.json();
+  if (data.error) { setStatus("err", data.error); $("btn").disabled = false; $("abortBtn").style.display = "none"; return; }
+
+  attachLogs();
+}
+
+syncDefault();
+refreshComp();
+</script>
+</body>
+</html>
