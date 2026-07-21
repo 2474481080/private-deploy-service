@@ -1,50 +1,63 @@
-# 阿克苏私有化自动部署工具
+# 私有化部署服务
 
-Windows 上运行的本地 Web 程序：页面填写目标服务器和部署变量，后端 SSH 到目标机，
-上传离线包并自动安装中间件，日志实时回传页面。
-
-## 当前状态：v1.0（全 15 组件，改名"私有化部署服务"）
-
-已实现组件（均在测试节点真机验证通过，幂等可重装）：
-- **JDK**：8/17 多版本共存（jdk8/jdk17 目录 + /data/apps/jdk 软链指默认版本），应用服务器可同时装两个
-- **Redis 6.2.9**：源码上传编译（依赖 yum/dnf/apt 自适应装 gcc/make），密码/端口变量，systemd Type=simple 托管，持久化按手册
-- **MinIO**：按架构上传二进制（x86_64/arm64 都有包），端口/账号变量，systemd + 健康检查
-- **Nacos 2.5.1**：数据库类型可选 达梦（自动放 dm 驱动+插件）/ MySQL（内置驱动），连接串/账号/schema/鉴权secret 全变量；不填库=内嵌 derby 测试模式；systemd + 就绪检查
-- **Sentinel 1.8.2**：jar 上传，端口变量，systemd + HTTP 检查
-- **XXL-JOB 2.2.0**：数据库类型可选 达梦/MySQL，外置 config/application.properties 覆盖 jar 配置（端口/连接串/账号全变量），systemd + 检查；登录路径 /xxl-job-admin/toLogin；两种库的建表 SQL 均在离线包 xxl-job/sql/
-- **Nginx 1.26.1**：源码编译，端口变量，systemd（forking）+ 验证；软链 /usr/bin/nginx
-- **ClickHouse 23.4.2.11**：tgz 离线安装（doinst.sh）+ 建 clickhouse 用户 + config.d/users.d 覆盖数据路径/监听/密码 + 自写 systemd（规避 doinst RuntimeDirectory 233）+ SELECT 1 验证
-- **InfluxDB 2.7**：二进制解压 + systemd + HTTP setup API 初始化（用户/org/桶/token，幂等 201/422）
-- **EMQX/RocketMQ官方/TDengine/Kafka/fx-python-tool-api**：docker load 本地镜像 + run（镜像在 F:\阿克苏镜像准备 按架构）
-- **Docker 29.5.3**：静态二进制离线安装（x86_64/arm64 双架构包，不依赖 yum/apt 源），数据目录 /data/apps/docker，daemon.json 预留私有镜像仓库变量；机器上已有 docker 时自动跳过（绝不覆盖）
-
-支持勾选多组件按依赖顺序批量安装（JDK 前置）。
+Windows 上运行的本地 Web 程序：网页填写目标服务器和部署变量，后端 SSH 到目标机，
+上传离线包/镜像并自动安装中间件，日志实时回传页面。**离线优先，x86_64 / arm64 双架构自动适配。**
 
 ## 用法
 
-1. 双击 `aksu-installer.exe`，自动打开浏览器 http://127.0.0.1:8765
-2. 填服务器 IP / 密码、确认安装目录和 JDK 版本，点“开始安装”
-3. 右侧实时看安装日志
+1. 双击 `私有化部署服务.exe`（或 `aksu-installer.exe`），浏览器自动打开 http://127.0.0.1:8765
+2. 填目标服务器 IP / 密码（或用免密），勾选要装的组件，填变量（都预填了默认值）
+3. 点开始安装，右侧实时看日志
 
-离线包目录默认 `E:\yjh\claude\aksu-deploy\离线包`，可用环境变量 `AKSU_OFFLINE_ROOT` 覆盖。
+程序默认从 exe 同级目录读 `离线包/` 和 `镜像/`（可用环境变量 `AKSU_OFFLINE_ROOT`、`AKSU_IMAGE_ROOT` 覆盖）。
 
-## 结构
+## 支持的组件（15）
 
-- `main.go` — 本地 HTTP 服务、SSE 日志流、安装任务调度
-- `internal/ssh/client.go` — SSH 执行（流式日志）+ SFTP 上传（带进度）
-- `internal/installer/installer.go` — 安装器接口、架构探测、组件注册表
-- `internal/installer/jdk.go` — JDK 安装器（打样组件）
-- `web/index.html` — 内嵌前端页面
+| 类型 | 组件 |
+| --- | --- |
+| 运行时 | JDK 8/17（多版本共存） |
+| 容器引擎 | Docker（静态二进制，老内核自动降级 20.10） |
+| 缓存/存储 | Redis、MinIO |
+| 注册/配置/调度 | Nacos、XXL-JOB（均支持达梦 / MySQL 双库） |
+| 限流 | Sentinel |
+| Web | Nginx（源码编译） |
+| 数据库 | ClickHouse、InfluxDB |
+| 消息/时序（容器） | EMQX、RocketMQ（官方）、TDengine、Kafka |
+| 应用（容器） | fx-python-tool-api |
 
-## 扩展新组件（后续）
+## 特性
 
-按 `installer.Installer` 接口在 `internal/installer/` 加一个文件（参照 jdk.go），
-在 `Registry()` 注册，前端加对应表单项即可。规划顺序：Nginx → 容器组件（EMQX/RocketMQ/TDengine，等用户的镜像仓库/镜像包就绪）。
+- **离线优先**：非容器组件用离线包上传安装，容器组件 `docker load` 本地镜像库，全程不依赖外网
+- **双架构**：按目标机 `uname -m` 自动选 x86_64 / arm64 的包与镜像
+- **双数据库**：Nacos / XXL-JOB 达梦、MySQL 一键切换，连接串/账号/建表 SQL 按库类型走
+- **免密**：程序生成本机公钥 + 一键配置命令，多台共用，附一键删除命令
+- **中断并清理**：全程中断按钮，中断后自动重连清理已装痕迹（防误触需输入确认字）
+- **多系统适配**：麒麟 / openEuler / CentOS 7+ / Ubuntu；CentOS 7 老内核自动用 Docker 20.10 兼容版
 
-离线包实际含：JDK(8/17, arm64+x86_64)、达梦、ClickHouse(x86)、InfluxDB(arm)、MinIO(arm64+x86_64)、Nacos、Sentinel、XXL-JOB、Redis 源码、Nginx 源码。
+## 分发包（现场使用）
 
-## 编译
+源码在本仓库；离线包与镜像因体积大不入库，单独打包分发，**按架构各一份**：
+
+| 包 | 内容 |
+| --- | --- |
+| `私有化部署服务_x86_64` / `_arm64` | exe + 离线包（对应架构）+ 文档 |
+| `镜像包_x86_64` / `_arm64` | 容器组件镜像 tar（对应架构） |
+
+现场按目标机架构，取对应的主程序包 + 镜像包，解压后把镜像目录放进主程序的 `镜像/` 下即可。
+
+## 现场唯一需自备
+
+Redis / Nginx 源码编译需目标机有 `gcc` + `pcre/zlib/openssl-devel`。纯无网络环境**挂系统安装 ISO 配本地 yum 源**即可离线安装——这是私有化交付的标准动作。详见 `无网络部署依赖清单.md`。
+
+## 从源码编译
 
 ```bash
 GOPROXY=https://goproxy.cn,direct go build -o aksu-installer.exe .
 ```
+
+## 结构
+
+- `main.go` — 本地 HTTP 服务、SSE 日志流、任务/中断/清理、免密公钥
+- `internal/ssh/` — SSH 执行 + SFTP 上传（带进度）
+- `internal/installer/` — 15 个组件安装器 + 通用框架（架构探测、镜像 load、编译工具链检测）
+- `web/index.html` — 内嵌前端页面
